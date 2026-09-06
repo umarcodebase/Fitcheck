@@ -52,12 +52,12 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
         "score_breakdown": {
             "type": "object",
             "properties": {
-                "keyword_match": {"type": "integer", "minimum": 0, "maximum": 100},
-                "required_skills_match": {"type": "integer", "minimum": 0, "maximum": 100},
-                "experience_relevance": {"type": "integer", "minimum": 0, "maximum": 100},
-                "role_alignment": {"type": "integer", "minimum": 0, "maximum": 100},
-                "ats_readability": {"type": "integer", "minimum": 0, "maximum": 100},
-                "education_certifications": {"type": "integer", "minimum": 0, "maximum": 100},
+                "keyword_match": {"type": "integer"},
+                "required_skills_match": {"type": "integer"},
+                "experience_relevance": {"type": "integer"},
+                "role_alignment": {"type": "integer"},
+                "ats_readability": {"type": "integer"},
+                "education_certifications": {"type": "integer"},
             },
             "required": [
                 "keyword_match",
@@ -79,7 +79,7 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                     "suggested_section": {"type": "string"},
                     "suggested_natural_usage": {"type": "string"},
                     "truthfulness_warning": {"type": "string"},
-                    "job_description_count": {"type": "integer", "minimum": 0},
+                    "job_description_count": {"type": "integer"},
                 },
                 "required": [
                     "keyword",
@@ -100,8 +100,8 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                     "keyword": {"type": "string"},
                     "importance": {"type": "string", "enum": ["Critical", "Important", "Nice to Have"]},
                     "resume_presence": {"type": "string"},
-                    "resume_count": {"type": "integer", "minimum": 0},
-                    "job_description_count": {"type": "integer", "minimum": 0},
+                    "resume_count": {"type": "integer"},
+                    "job_description_count": {"type": "integer"},
                     "strength": {"type": "string"},
                     "suggested_improvement": {"type": "string"},
                 },
@@ -123,8 +123,8 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "keyword": {"type": "string"},
                     "importance": {"type": "string", "enum": ["Critical", "Important", "Nice to Have"]},
-                    "resume_count": {"type": "integer", "minimum": 0},
-                    "job_description_count": {"type": "integer", "minimum": 0},
+                    "resume_count": {"type": "integer"},
+                    "job_description_count": {"type": "integer"},
                     "why_weak": {"type": "string"},
                     "recommended_action": {"type": "string"},
                 },
@@ -144,7 +144,7 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "keyword": {"type": "string"},
-                    "resume_count": {"type": "integer", "minimum": 0},
+                    "resume_count": {"type": "integer"},
                     "why_overused": {"type": "string"},
                     "recommended_action": {"type": "string"},
                 },
@@ -548,15 +548,19 @@ RETURN CONTENT THAT IS USEFUL TO A BEGINNER. Keep individual recommendation item
 def analyze_with_gemini(resume_text: str, job_description: str) -> dict[str, Any]:
     api_key = get_api_key()
     if not api_key:
-        raise RuntimeError("Gemini API key is missing. Add GEMINI_API_KEY to Streamlit Secrets.")
+        raise RuntimeError(
+            "GEMINI_API_KEY is missing from Streamlit Secrets."
+        )
 
     client = get_gemini_client(api_key)
     prompt = build_prompt(resume_text, job_description)
 
+    # Use response_json_schema so the SDK receives an explicit JSON Schema.
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_schema=ANALYSIS_SCHEMA,
-        temperature=0.2,
+        response_json_schema=ANALYSIS_SCHEMA,
+        temperature=0.1,
+        max_output_tokens=12000,
     )
 
     response = client.models.generate_content(
@@ -566,15 +570,112 @@ def analyze_with_gemini(resume_text: str, job_description: str) -> dict[str, Any
     )
 
     raw_text = getattr(response, "text", None)
+
+    # Defensive fallback for SDK responses where the convenience .text
+    # property is empty but candidate parts contain text.
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        candidates = getattr(response, "candidates", None) or []
+        parts = []
+
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+
+            for part in getattr(content, "parts", None) or []:
+                text = getattr(part, "text", None)
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+
+        raw_text = "\n".join(parts)
+
     if not raw_text:
-        raise ValueError("Gemini returned an empty response.")
+        raise ValueError(
+            "Gemini returned no readable text. The model may have "
+            "blocked or interrupted the response."
+        )
 
     try:
-        data = json.loads(raw_text)
+        data = json.loads(raw_text.strip())
     except json.JSONDecodeError as exc:
-        raise ValueError("Gemini returned malformed JSON. Please try the analysis again.") from exc
+        raise ValueError(
+            "Gemini returned a response that was not valid JSON."
+        ) from exc
 
     return validate_analysis(data)
+
+
+def classify_gemini_error(exc: Exception) -> str:
+    """Turn common Gemini failures into useful beginner-friendly messages."""
+    message = str(exc).strip()
+    lowered = message.lower()
+
+    if not message:
+        return "Gemini returned an unspecified error."
+
+    if (
+        "api key" in lowered
+        or "authentication" in lowered
+        or "unauthenticated" in lowered
+        or "invalid api" in lowered
+        or "401" in lowered
+        or "403" in lowered
+    ):
+        return (
+            "Gemini authentication failed. Check that GEMINI_API_KEY "
+            "is correct, active, and has no extra spaces."
+        )
+
+    if (
+        "quota" in lowered
+        or "resource exhausted" in lowered
+        or "rate limit" in lowered
+        or "429" in lowered
+    ):
+        return (
+            "Gemini quota or rate limit was reached. Check your Gemini "
+            "API quota/billing status and try again later."
+        )
+
+    if (
+        "model" in lowered
+        and (
+            "not found" in lowered
+            or "unsupported" in lowered
+            or "invalid" in lowered
+        )
+    ):
+        return (
+            f"The configured Gemini model ({MODEL_NAME}) was rejected. "
+            "Check model/API availability for your project."
+        )
+
+    if (
+        "schema" in lowered
+        or "structured output" in lowered
+        or "response_json_schema" in lowered
+        or "response_schema" in lowered
+    ):
+        return (
+            "Gemini rejected the structured-output schema. The app uses "
+            "a simplified JSON schema. See Technical details below."
+        )
+
+    if "timeout" in lowered or "deadline" in lowered or "timed out" in lowered:
+        return (
+            "The Gemini request timed out. Try again or use a shorter "
+            "resume/job description."
+        )
+
+    if "json" in lowered or "unexpected response" in lowered:
+        return (
+            "Gemini returned an unexpected response format. Please try again."
+        )
+
+    return (
+        "The Gemini request failed. See Technical details below for the "
+        "exact API error."
+    )
 
 
 # =========================================================
@@ -586,6 +687,9 @@ if "analysis" not in st.session_state:
 
 if "resume_meta" not in st.session_state:
     st.session_state.resume_meta = None
+
+if "last_error" not in st.session_state:
+    st.session_state.last_error = None
 
 
 # =========================================================
@@ -692,6 +796,7 @@ with col_b:
     if st.button("Clear Results", use_container_width=True):
         st.session_state.analysis = None
         st.session_state.resume_meta = None
+        st.session_state.last_error = None
         st.rerun()
 with col_c:
     st.caption("One Gemini request per button click")
@@ -733,23 +838,23 @@ if analyze_clicked:
                     "job_truncated": job_truncated,
                 }
             except Exception as exc:
-                message = str(exc).strip() or "The analysis could not be completed."
-                lowered = message.lower()
-
-                if "api key" in lowered or "authentication" in lowered or "unauthenticated" in lowered:
-                    user_message = "Gemini authentication failed. Check that your GEMINI_API_KEY is correct and active."
-                elif "quota" in lowered or "rate" in lowered or "resource exhausted" in lowered:
-                    user_message = "Gemini rate/quota limit reached. Wait a little and try again, or review your API quota."
-                elif "timeout" in lowered or "deadline" in lowered:
-                    user_message = "The Gemini request timed out. Please try again with a slightly shorter resume or job description."
-                elif "json" in lowered or "response format" in lowered or "unexpected response" in lowered:
-                    user_message = "Gemini returned an unexpected response format. Please run the analysis again."
-                else:
-                    user_message = "Fit Check could not complete the analysis. Please check your inputs and try again."
-
-                st.error(user_message)
-                # Details are intentionally kept out of normal user-facing output to avoid exposing internals.
                 st.session_state.analysis = None
+                st.session_state.last_error = str(exc)
+
+                st.error(classify_gemini_error(exc))
+
+                with st.expander(
+                    "Technical details (safe to share for troubleshooting)"
+                ):
+                    st.code(
+                        str(exc)
+                        or "No additional error details were returned."
+                    )
+
+                st.caption(
+                    "Your API key is not displayed here. If you need help, "
+                    "share the technical error text above."
+                )
 
 
 # =========================================================
