@@ -922,7 +922,7 @@ if analysis:
     st.markdown("### Biggest Weaknesses")
     if analysis["weaknesses"]:
         for weakness in analysis["weaknesses"][:6]:
-            st.warning(weakness, icon="!")
+            st.warning(weakness, icon="⚠️")
     else:
         st.write("No major weaknesses were returned.")
 
