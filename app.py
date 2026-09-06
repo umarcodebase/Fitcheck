@@ -716,7 +716,7 @@ with st.sidebar:
     st.markdown("### How Fit Check works")
     st.write("1. Upload a PDF, DOCX, or TXT resume.")
     st.write("2. Paste the complete job description.")
-    st.write("3. Run one analysis with Gemini.")
+    st.write("3. Run one analysis with Fitcheck.")
     st.write("4. Review the score, keyword gaps, and action plan.")
 
     st.divider()
@@ -731,7 +731,7 @@ with st.sidebar:
     st.divider()
     st.info(
         "Privacy: the app keeps resume text in the current session only and does not intentionally write resumes to permanent storage. "
-        "The extracted text is sent to Gemini for the requested analysis."
+        "The extracted text is sent to Fitcheck for the requested analysis."
     )
 
 
