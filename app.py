@@ -15,7 +15,7 @@ from pypdf import PdfReader
 # =========================================================
 
 APP_NAME = "Fit Check"
-MODEL_NAME = "gemini-3.6-flash"
+MODEL_NAME = "gemini-3.5-flash-lite"
 MAX_RESUME_CHARS = 60_000
 MAX_JOB_CHARS = 40_000
 MIN_RESUME_CHARS = 250
