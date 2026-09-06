@@ -915,7 +915,7 @@ if analysis:
     st.markdown("### Biggest Strengths")
     if analysis["strengths"]:
         for strength in analysis["strengths"][:6]:
-            st.success(strength, icon="✓")
+            st.success(strength, icon="✅")
     else:
         st.write("No strengths were returned.")
 
